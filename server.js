@@ -4,7 +4,11 @@ const nodemailer = require('nodemailer');
 const cors = require('cors'); // Import cors
 
 const app = express();
-const PORT = 3000; // Port to run the server locally
+const PORT = process.env.PORT || 3000; // Use the dynamic port in production, fallback to 3000 locally
+
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server is running on port ${PORT}`);
+});
 
 // Enable CORS
 app.use(cors());
