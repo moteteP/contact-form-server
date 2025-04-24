@@ -4,9 +4,8 @@ const nodemailer = require('nodemailer');
 const cors = require('cors'); // Import cors
 
 const app = express();
-const PORT = process.env.PORT || 3000; // Use the dynamic port in production, fallback to 3000 locally
-
-app.listen(PORT, '0.0.0.0', () => {
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
 });
 
@@ -81,9 +80,4 @@ app.post('/send-email', async (req, res) => {
         console.error('Error details:', error); // Log the full error object
         res.status(500).send('Failed to send emails.');
     }
-});
-
-// Start the server
-app.listen(PORT, () => {
-    console.log(`Server is running on http://localhost:${PORT}`);
 });
