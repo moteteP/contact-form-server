@@ -1,13 +1,23 @@
 require('dotenv').config(); // Load environment variables from .env
 const express = require('express');
 const nodemailer = require('nodemailer');
-const cors = require('cors'); // Import cors
+const cors = require('cors');
+const rateLimit = require('express-rate-limit');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
+
+// Rate-limiting configuration
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 5, // Limit each IP to 5 requests per window
+    message: 'Too many requests from this IP, please try again later.',
+    standardHeaders: true,
+    legacyHeaders: false,
 });
+
+// Apply rate-limiting middleware to the /send-email route
+app.use('/send-email', limiter);
 
 // Enable CORS
 app.use(cors());
@@ -20,15 +30,30 @@ app.use(express.json());
 app.post('/send-email', async (req, res) => {
     console.log('Raw request body:', req.body); // Debugging
 
-    const { name, email, message } = req.body; // Extract form data
-    console.log('Parsed form data:', { name, email, message }); // Debugging
+    const { name, email, message, honeypot } = req.body; // Extract form data
+    console.log('Parsed form data:', { name, email, message, honeypot }); // Debugging
+
+    // Honeypot check (If the honeypot field is filled, it's likely a bot)
+    if (honeypot) {
+        return res.status(400).send('Bot detected!');
+    }
+
+    // Input validation
+    if (
+        !name || !email || !message ||
+        typeof name !== 'string' ||
+        typeof email !== 'string' ||
+        typeof message !== 'string'
+    ) {
+        return res.status(400).send('Invalid input');
+    }
 
     try {
         // Create a transporter for sending emails
         const transporter = nodemailer.createTransport({
             host: process.env.SMTP_HOST,
             port: process.env.SMTP_PORT,
-            secure: true, // Use TLS
+            secure: true,
             auth: {
                 user: process.env.SMTP_USER,
                 pass: process.env.SMTP_PASS,
@@ -80,4 +105,9 @@ app.post('/send-email', async (req, res) => {
         console.error('Error details:', error); // Log the full error object
         res.status(500).send('Failed to send emails.');
     }
+});
+
+// Start the server
+app.listen(PORT, () => {
+    console.log(`Server is running on http://localhost:${PORT}`);
 });
