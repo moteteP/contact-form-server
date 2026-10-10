@@ -10,7 +10,6 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{1
 const SINGLE_LINE_CONTROL = /[\u0000-\u001f\u007f]/;
 const MESSAGE_CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 const validEmail = value => typeof value === 'string' && value.length <= 254 && EMAIL.test(value);
-const escapeHtml = value => value.replace(/[&<>"']/g, character => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[character]));
 
 function settings(env) {
   const config = {
@@ -35,42 +34,15 @@ function parseInput(body) {
   if (name.length < 2 || name.length > 120 || SINGLE_LINE_CONTROL.test(name) || !validEmail(email) || message.length < 10 || message.length > 5000 || MESSAGE_CONTROL.test(message)) return null;
   if (body.submission_id !== undefined && (typeof body.submission_id !== 'string' || !UUID.test(body.submission_id))) return null;
   if (body.language !== undefined && !['en', 'es', 'fr'].includes(body.language)) return null;
-  return { name, email, message, language: body.language || 'en', id: body.submission_id || randomUUID() };
+  if (body.submitted_at !== undefined) {
+    if (typeof body.submitted_at !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(body.submitted_at)) return null;
+    const date = new Date(body.submitted_at);
+    if (!Number.isFinite(date.getTime()) || date.toISOString() !== body.submitted_at) return null;
+  }
+  return { name, email, message, language: body.language || 'en', id: body.submission_id || randomUUID(), submittedAt: body.submitted_at || null };
 }
 
-function emailFrame(title, content, language = 'en') {
-  return `<!doctype html><html lang="${language}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body style="margin:0;background:#edf2f1;color:#14232b;font-family:Arial,Helvetica,sans-serif">
-<table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center" style="padding:28px 12px">
-<table role="presentation" width="600" cellspacing="0" cellpadding="0" style="width:100%;max-width:600px;background:#ffffff;border:1px solid #d8e3df;border-radius:16px">
-<tr><td style="padding:28px;background:#0b141c;color:#76dfc1;border-radius:16px 16px 0 0;font-size:12px;font-weight:bold;letter-spacing:3px">ALVAREZSM / PORTFOLIO</td></tr>
-<tr><td style="padding:28px;font-size:16px;line-height:1.7"><h1 style="margin:0 0 22px;font-size:28px;line-height:1.2;letter-spacing:-1px">${title}</h1>${content}</td></tr>
-<tr><td style="padding:20px 28px;border-top:1px solid #d8e3df;font-size:12px;line-height:1.7;color:#52646d">Pedro Alvarez · Front-end development<br><a href="https://port.alvarezsm.com" style="color:#176b59">Portfolio</a> · <a href="https://port.alvarezsm.com/privacy-policy.html" style="color:#176b59">Privacy Policy</a></td></tr>
-</table></td></tr></table></body></html>`;
-}
-
-function makeEmails(input, config) {
-  const from = `AlvarezSM | Portfolio <${config.from}>`;
-  const primary = {
-    from, to: [config.to], reply_to: input.email,
-    subject: 'New portfolio contact message',
-    text: `Name: ${input.name}\nEmail: ${input.email}\n\n${input.message}`,
-    html: emailFrame('A new conversation.', `<p><strong>Name:</strong> ${escapeHtml(input.name)}<br><strong>Email:</strong> ${escapeHtml(input.email)}</p><div style="padding:20px;background:#f1f7f4;border-left:3px solid #24866d;overflow-wrap:anywhere">${escapeHtml(input.message).replace(/\n/g, '<br>')}</div>`)
-  };
-  const receiptCopy = {
-    en: { subject: 'Thank you for your message', title: 'Let’s make it happen.', body: 'Thank you for contacting me. Your message has been submitted successfully. I’ll get back to you at this email address.', note: 'If you did not submit a portfolio enquiry, you can ignore this email.' },
-    es: { subject: 'Gracias por tu mensaje', title: 'Hagámoslo realidad.', body: 'Gracias por contactar conmigo. Tu mensaje se ha enviado correctamente. Te responderé a esta dirección de correo.', note: 'Si no has enviado una consulta desde el portfolio, puedes ignorar este correo.' },
-    fr: { subject: 'Merci pour votre message', title: 'Donnons-lui vie.', body: 'Merci de m’avoir contacté. Votre message a bien été soumis. Je vous répondrai à cette adresse e-mail.', note: 'Si vous n’avez pas envoyé de demande depuis le portfolio, vous pouvez ignorer cet e-mail.' }
-  }[input.language];
-  // Do not echo untrusted names, links or messages into an automatic email to a visitor.
-  const receipt = {
-    from, to: [input.email], reply_to: config.to,
-    subject: receiptCopy.subject,
-    text: `${receiptCopy.body}\n\nPedro Alvarez\nhttps://port.alvarezsm.com\n\n${receiptCopy.note}`,
-    html: emailFrame(receiptCopy.title, `<p>${receiptCopy.body}</p><p>Pedro Alvarez</p><p style="font-size:12px;color:#52646d">${receiptCopy.note}</p>`, input.language)
-  };
-  return { primary, receipt };
-}
+const { makeEmails } = require('./email-templates');
 
 class DeliveryError extends Error {
   constructor(code, status = 0) { super(code); this.code = code; this.status = status; }
@@ -119,7 +91,7 @@ function createApp(options = {}) {
     methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Accept'], maxAge: 600
   }));
   // Liveness/configuration only: this route does not send email or verify DNS/API credentials.
-  app.get('/health', (_request, response) => response.json({ ok: true, service: 'portfolio-contact', version: '2.0.0', provider: 'resend', configured: config.configured }));
+  app.get('/health', (_request, response) => response.json({ ok: true, service: 'portfolio-contact', version: '2.1.0', provider: 'resend', configured: config.configured }));
 
   const perIp = rateLimit({
     windowMs: 15 * 60 * 1000, limit: 5, standardHeaders: 'draft-8', legacyHeaders: false,

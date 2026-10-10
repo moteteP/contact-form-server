@@ -2,7 +2,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto');
-const { createApp, createMailSender, DeliveryError, settings } = require('../server');
+const { createApp, createMailSender, DeliveryError, settings, makeEmails, parseInput } = require('../server');
 
 // No real credentials. Every email transport in this suite is a local fake.
 const env = {
@@ -10,7 +10,7 @@ const env = {
   CONTACT_TO: 'owner@example.com', ALLOWED_ORIGINS: 'https://port.alvarezsm.com',
   SEND_CONFIRMATION: 'true'
 };
-const valid = () => ({ name: 'Visitor Example', email: 'visitor@example.com', message: 'A local test of the contact service.', honeypot: '', language: 'es', submission_id: randomUUID() });
+const valid = () => ({ name: 'Visitor Example', email: 'visitor@example.com', message: 'A local test of the contact service.', honeypot: '', language: 'es', submission_id: randomUUID(), submitted_at:'2026-10-10T09:04:00.000Z' });
 async function fixture(t, overrides = {}) {
   const calls = [], logs = [];
   const app = createApp({ env, sendEmail: async (payload, key) => { calls.push({ payload, key }); return 'fake-accepted-id'; },
@@ -29,7 +29,7 @@ test('health is non-sending liveness/configuration, not a claim of delivery', as
   const { base, calls } = await fixture(t);
   const response = await fetch(base + '/health');
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { ok: true, service: 'portfolio-contact', version: '2.0.0', provider: 'resend', configured: true });
+  assert.deepEqual(await response.json(), { ok: true, service: 'portfolio-contact', version: '2.1.0', provider: 'resend', configured: true });
   assert.equal(response.headers.get('cache-control'), 'no-store');
   assert.equal(response.headers.get('x-powered-by'), null);
   assert.equal(calls.length, 0);
@@ -44,13 +44,13 @@ test('a valid form uses the verified sender, visitor reply-to and separate recei
   assert.deepEqual(await response.json(), { ok: true, confirmation: 'accepted' });
   assert.equal(response.headers.get('access-control-allow-origin'), env.ALLOWED_ORIGINS);
   assert.equal(calls.length, 2);
-  assert.equal(calls[0].payload.from, 'AlvarezSM | Portfolio <contact@mail.example.com>');
+  assert.equal(calls[0].payload.from, 'AlvarezSM <contact@mail.example.com>');
   assert.deepEqual(calls[0].payload.to, ['owner@example.com']);
   assert.equal(calls[0].payload.reply_to, body.email);
   assert.equal(calls[0].key, 'portfolio-owner/' + body.submission_id);
   assert.equal(calls[1].key, 'portfolio-receipt/' + body.submission_id);
   assert.equal(calls[1].payload.reply_to, env.CONTACT_TO);
-  assert.equal(calls[1].payload.subject, 'Gracias por tu mensaje');
+  assert.equal(calls[1].payload.subject, 'AlvarezSM — Mensaje recibido');
 });
 
 test('user HTML is escaped, and receipts never echo user-supplied text or links', async t => {
@@ -75,7 +75,7 @@ test('receipt failure is still success; no false total failure or private data i
 
 test('receipt is optional; old clients without submission id/language still work', async t => {
   const { post, calls } = await fixture(t, { env: { ...env, SEND_CONFIRMATION: 'false' } });
-  const body = valid(); delete body.language; delete body.submission_id;
+  const body = valid(); delete body.language; delete body.submission_id; delete body.submitted_at;
   const response = await post(body);
   assert.deepEqual(await response.json(), { ok: true, confirmation: 'disabled' });
   assert.equal(calls.length, 1);
@@ -86,7 +86,8 @@ test('validation rejects unsafe, missing and malformed fields without sending', 
   const cases = [null, [], {}, { name: ['Visitor'] }, { name: 'x' }, { name: 'A\r\nB' }, { name: 'x'.repeat(121) },
     { email: 'not-email' }, { email: 'a@b.example\r\nBCC:x@y.example' }, { email: 'bad..domain@example..com' },
     { message: 'short' }, { message: 'x'.repeat(5001) }, { message: 'message with a null\0' },
-    { honeypot: 'bot' }, { honeypot: [] }, { language: 'invalid' }, { language: {} }, { submission_id: 'not-uuid' }];
+    { honeypot: 'bot' }, { honeypot: [] }, { language: 'invalid' }, { language: {} }, { submission_id: 'not-uuid' },
+    {submitted_at:null}, {submitted_at:[]}, {submitted_at:'<script>alert(1)</script>'}, {submitted_at:'2026-02-30T09:04:00.000Z'}, {submitted_at:'2026-10-10T09:04:00.000Z junk'}];
   for (const [index, change] of cases.entries()) await t.test(String(index), async child => {
     const { post, calls } = await fixture(child);
     const body = change === null || Array.isArray(change) || Object.keys(change).length === 0 ? change : { ...valid(), ...change };
@@ -194,4 +195,37 @@ test('HTTPS adapter rejects error/malformed responses and aborts stalled request
   }
   const send = createMailSender('fake', (_url, { signal }) => new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true })), 20);
   await assert.rejects(send({}, 'test'), error => error.code === 'PROVIDER_TIMEOUT');
+});
+
+test('branded templates include inline PA, date, reference and plain text without owner name', () => {
+  for (const language of ['en','es','fr']) {
+    const input=parseInput({...valid(),language});
+    const messages=makeEmails(input,settings(env));
+    for (const mail of Object.values(messages)) {
+      assert.equal(mail.from,'AlvarezSM <contact@mail.example.com>');
+      assert(!mail.html.includes('Pedro') && !mail.text.includes('Pedro'));
+      assert(mail.html.includes('cid:alvarezsm-pa'));
+      assert(mail.text.includes('Europe/Paris'));
+      assert(mail.text.includes('11:04'));
+      assert(mail.text.includes('ASM-'+input.id.slice(0,8).toUpperCase()));
+      assert.equal(mail.attachments.length,1);
+      assert.equal(mail.attachments[0].content_id,'alvarezsm-pa');
+      assert.equal(Buffer.from(mail.attachments[0].content,'base64').subarray(1,4).toString(),'PNG');
+      assert(!mail.html.includes('<script'));
+    }
+    assert(messages.receipt.html.includes('lang="'+language+'"'));
+    assert(!messages.receipt.html.includes(input.name));
+    assert(!messages.receipt.html.includes(input.message));
+    assert(!messages.receipt.html.includes(input.email));
+  }
+});
+
+test('date is stable across retries/restarts and respects Paris daylight saving', () => {
+  const input=parseInput(valid());
+  assert.deepEqual(makeEmails(input,settings(env)),makeEmails({...input},settings(env)));
+  const winter=makeEmails({...input,submittedAt:'2026-01-10T09:04:00.000Z'},settings(env));
+  assert(winter.primary.text.includes('10:04'));
+  const legacy=makeEmails({...input,submittedAt:null},settings(env));
+  assert(legacy.primary.text.includes('See the email header'));
+  assert(legacy.receipt.text.includes('Consulta la cabecera'));
 });

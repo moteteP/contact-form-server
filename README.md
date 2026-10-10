@@ -1,4 +1,4 @@
-# AlvarezSM contact service — Resend HTTPS
+# AlvarezSM contact service 2.1.0 — Resend HTTPS
 
 Node.js 22, Express 5. Replaces the old SMTP transport while preserving `POST /send-email`.
 
@@ -31,11 +31,16 @@ For local work, use Node 22, `npm ci`, then `npm test`. The test suite uses fake
   "message": "A message of between 10 and 5000 characters.",
   "honeypot": "",
   "language": "en",
-  "submission_id": "2f6e2c1a-5f23-4c11-9589-47e92fce9e54"
+  "submission_id": "2f6e2c1a-5f23-4c11-9589-47e92fce9e54",
+  "submitted_at": "2026-10-10T09:04:00.000Z"
 }
 ```
 
 `language` is optional (`en`, `es`, `fr`). `submission_id` is an optional UUID v4 for old-client compatibility. New clients must reuse it for unchanged retries. Missing IDs get a fresh server UUID and do not protect retries.
+
+`submitted_at` is optional for legacy clients, and must be a canonical UTC ISO timestamp with milliseconds when supplied. It is the browser's initial submission time, not an independently verified server receipt time. New clients retain the same timestamp, language and UUID on an unchanged retry. The templates display the timestamp in Europe/Paris, with automatic daylight-saving handling. When it is absent, the template refers to the email header instead of inventing a time.
+
+Templates live in `email-templates.js`. Commit `assets/pa-logo.png` alongside it: it is embedded as a base64 CID attachment, using the Resend REST `content_id` field. There is no external logo request. The display name is AlvarezSM; no owner's personal name is hardcoded. The owner notification retains visitor details; the localized visitor receipt does not repeat their name, email or message. The short reference is a convenience label, not an authentication token or guaranteed-unique database key.
 
 Success: `200 {"ok":true,"confirmation":"accepted"}`. Confirmation may instead be `disabled` or `failed`; the main message has still been accepted by Resend. Acceptance is not a delivery guarantee.
 
@@ -48,6 +53,6 @@ Errors use `{ "ok": false, "code": "..." }`: `INVALID_INPUT`, `INVALID_REQUEST`,
 - Confirmations are awaited, but their failure never changes primary success to failure. No persistent queue or automatic background retries. If the process is killed mid-send, check provider status before a manual retry.
 - HTML-escaped visitor content in the owner email; no untrusted visitor content echoed to the receipt. No tracking pixel, remote logo request, personal message logging or public static file serving.
 - CORS is a browser restriction, not authentication or a complete bot defense. In-memory limits reset on restarts and are not shared across instances. Add durable limits/challenge verification if traffic warrants it.
-- Deployment and real delivery remain manual; the Spanish `EMPEZAR-AQUI.md` delivered with the package has the complete walkthrough.
+- Deployment and real delivery remain manual; `INSTALAR.md` in the delivery package has the Spanish walkthrough. Browser previews are not a substitute for checking real Gmail, Outlook or Apple Mail rendering after deployment.
 
 No real `.env`, API keys or `node_modules` should be committed.
